@@ -3,6 +3,7 @@
 set -e
 
 cd "$SRCDIR/build"
+sysctl net.ipv4.conf.all.forwarding=1
 ../tools/rebuild-image weaveworks/weavebuild . Dockerfile build.sh
 touch "$SRCDIR/.build.uptodate"
 cd "$SRCDIR"
