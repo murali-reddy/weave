@@ -21,6 +21,9 @@ type routes struct {
 	recalc       chan<- *struct{}
 	wait         chan<- chan struct{}
 	action       chan<- func()
+       calculateBroadcastCounter1 int
+       calculateBroadcastCounter2 int
+       calculateUnicastCounter int	
 	// [1] based on *all* connections, not just established &
 	// symmetric ones
 }
@@ -107,6 +110,7 @@ func (r *routes) lookupOrCalculate(name PeerName, broadcast *broadcastRoutes, es
 			return
 		}
 		r.peers.RLock()
+		r.calculateBroadcastCounter2++
 		r.ourself.RLock()
 		hops = r.calculateBroadcast(name, establishedAndSymmetric)
 		r.ourself.RUnlock()
@@ -209,6 +213,7 @@ func (r *routes) calculate() {
 	r.unicastAll = unicastAll
 	r.broadcast = broadcast
 	r.broadcastAll = broadcastAll
+	r.calculateBroadcastCounter1++
 	onChange := r.onChange
 	r.Unlock()
 
@@ -227,6 +232,7 @@ func (r *routes) calculate() {
 // to exchange knowledge of MAC addresses, nor any constraints on
 // the routes that we construct.
 func (r *routes) calculateUnicast(establishedAndSymmetric bool) unicastRoutes {
+	r.calculateUnicastCounter++
 	_, unicast := r.ourself.routes(nil, establishedAndSymmetric)
 	return unicast
 }

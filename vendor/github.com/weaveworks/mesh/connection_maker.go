@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -18,6 +19,7 @@ type peerAddrs map[string]*net.TCPAddr
 
 // ConnectionMaker initiates and manages connections to peers.
 type connectionMaker struct {
+	sync.RWMutex
 	ourself          *localPeer
 	peers            *Peers
 	localAddr        string
@@ -29,6 +31,7 @@ type connectionMaker struct {
 	terminationCount int
 	actionChan       chan<- connectionMakerAction
 	logger           Logger
+	refreshCounter int
 }
 
 // TargetState describes the connection state of a remote target.

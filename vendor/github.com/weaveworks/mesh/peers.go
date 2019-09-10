@@ -15,6 +15,7 @@ type Peers struct {
 	byName    map[PeerName]*Peer
 	byShortID map[PeerShortID]shortIDPeers
 	onGC      []func(*Peer)
+	garbageCollectCounter int
 
 	// Called when the mapping from short IDs to peers changes
 	onInvalidateShortIDs []func()
@@ -417,6 +418,7 @@ func (peers *Peers) GarbageCollect() {
 func (peers *Peers) garbageCollect(pending *peersPendingNotifications) {
 	peers.ourself.RLock()
 	_, reached := peers.ourself.routes(nil, false)
+	peers.garbageCollectCounter++
 	peers.ourself.RUnlock()
 
 	for name, peer := range peers.byName {

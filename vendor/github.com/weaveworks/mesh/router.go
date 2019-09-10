@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -53,6 +54,13 @@ type Router struct {
 	topologyGossip  Gossip
 	acceptLimiter   *tokenBucket
 	logger          Logger
+	unicastCounter  int
+	broadcastCounter int
+	relayBroadcastCounter int
+	recvBroadcastCounter int
+	limiter1      *rate.Limiter
+	limiter2      *rate.Limiter
+	limiter3      *rate.Limiter
 }
 
 // NewRouter returns a new router. It must be started.
@@ -78,6 +86,9 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 	}
 	router.topologyGossip = gossip
 	router.acceptLimiter = newTokenBucket(acceptMaxTokens, acceptTokenDelay)
+	router.limiter1 = rate.NewLimiter(2, 1)
+	router.limiter2 = rate.NewLimiter(2, 1)
+	router.limiter3 = rate.NewLimiter(2, 1)
 	return router, nil
 }
 
@@ -85,6 +96,32 @@ func NewRouter(config Config, name PeerName, nickName string, overlay Overlay, l
 // that gossipers can register before we start forming connections.
 func (router *Router) Start() {
 	router.listenTCP()
+	ticker := time.NewTicker(1 * time.Second)
+	var c1, c21, c22, c3, c4, c5, c6, c7, c8 int
+	go func() {
+		for _ = range ticker.C {
+			fmt.Printf("%s Peers.garbageCollect(): %d\n", time.Now().Format("2006-01-02 3:4:5"), router.Peers.garbageCollectCounter-c1)
+			fmt.Printf("%s routes.calculate() - calculateBroadcast(): %d\n", time.Now().Format("2006-01-02 3:4:5"), router.Routes.calculateBroadcastCounter1-c21)
+			fmt.Printf("%s routes.lookupOrCalculate() - calculateBroadcast(): %d\n", time.Now().Format("2006-01-02 3:4:5"), router.Routes.calculateBroadcastCounter2-c22)
+			fmt.Printf("%s routes.calculateUnicast(): %d\n", time.Now().Format("2006-01-02 3:4:5"), router.Routes.calculateUnicastCounter-c3)
+			fmt.Printf("%s connectionMaker.refresh(): %d\n", time.Now().Format("2006-01-02 3:4:5"), router.ConnectionMaker.refreshCounter-c4)
+			fmt.Printf("%s ProtocolGossipUnicast: %d\n", time.Now().Format("2006-01-02 3:4:5"), router.unicastCounter-c5)
+			fmt.Printf("%s gossip broadcast - external: %d\n", time.Now().Format("2006-01-02 3:4:5"), router.broadcastCounter-c6)	
+			fmt.Printf("%s gossip broadcast - internal: %d\n", time.Now().Format("2006-01-02 3:4:5"), router.relayBroadcastCounter-c7)
+			fmt.Printf("%s received gossip broadcast: %d\n", time.Now().Format("2006-01-02 3:4:5"), router.recvBroadcastCounter-c8)	
+			fmt.Printf("===================================================================\n")
+
+			c1=router.Peers.garbageCollectCounter
+			c21=router.Routes.calculateBroadcastCounter1
+			c22=router.Routes.calculateBroadcastCounter2
+			c3=router.Routes.calculateUnicastCounter
+			c4=router.ConnectionMaker.refreshCounter
+			c5=router.unicastCounter
+			c6=router.broadcastCounter
+			c7=router.relayBroadcastCounter
+			c8=router.recvBroadcastCounter
+		}
+	}()
 }
 
 // Stop shuts down the router.
@@ -181,11 +218,20 @@ func (router *Router) handleGossip(tag protocolTag, payload []byte) error {
 	if err := decoder.Decode(&srcName); err != nil {
 		return err
 	}
+	router.gossipLock.RLock()
+	defer router.gossipLock.RUnlock()
 	switch tag {
 	case ProtocolGossipUnicast:
+		router.unicastCounter++
 		return channel.deliverUnicast(srcName, payload, decoder)
 	case ProtocolGossipBroadcast:
-		return channel.deliverBroadcast(srcName, payload, decoder)
+		router.broadcastCounter++
+		if router.limiter3.Allow() {
+			return channel.deliverBroadcast(srcName, payload, decoder)
+		} else {
+			return nil
+		}
+		
 	case ProtocolGossip:
 		return channel.deliver(srcName, payload, decoder)
 	}
@@ -222,6 +268,10 @@ func (router *Router) sendPendingGossip() bool {
 // BroadcastTopologyUpdate is invoked whenever there is a change to the mesh
 // topology, and broadcasts the new set of peers to the mesh.
 func (router *Router) broadcastTopologyUpdate(update []*Peer) {
+	router.relayBroadcastCounter++
+	if !router.limiter1.Allow() {
+		return
+	}
 	names := make(peerNameSet)
 	for _, p := range update {
 		names[p.Name] = struct{}{}
@@ -238,6 +288,7 @@ func (router *Router) OnGossipUnicast(sender PeerName, msg []byte) error {
 // OnGossipBroadcast receives broadcasts of TopologyGossipData.
 // It returns the received update unchanged.
 func (router *Router) OnGossipBroadcast(_ PeerName, update []byte) (GossipData, error) {
+	router.recvBroadcastCounter++
 	origUpdate, _, err := router.applyTopologyUpdate(update)
 	if err != nil || len(origUpdate) == 0 {
 		return nil, err
@@ -267,7 +318,12 @@ func (router *Router) applyTopologyUpdate(update []byte) (peerNameSet, peerNameS
 		return nil, nil, err
 	}
 	if len(newUpdate) > 0 {
-		router.ConnectionMaker.refresh()
+		router.ConnectionMaker.Lock()
+		router.ConnectionMaker.refreshCounter++
+		router.ConnectionMaker.Unlock()
+		if router.limiter2.Allow() {
+			router.ConnectionMaker.refresh()
+		}
 		router.Routes.recalculate()
 	}
 	return origUpdate, newUpdate, nil
